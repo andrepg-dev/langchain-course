@@ -1,3 +1,4 @@
+from operator import itemgetter
 import os
 
 from dotenv import load_dotenv
@@ -6,6 +7,11 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from rich.console import Console
+
+console = Console()
 
 load_dotenv(override=True)
 
@@ -13,6 +19,7 @@ load_dotenv(override=True)
 print("[*] Initializing components...")
 
 embeddings = OpenAIEmbeddings()
+# llm = ChatOllama(model="qwen3:1.7b")
 llm = ChatOpenAI(model="gpt-3.5-turbo")
 
 # Get the pinecone vector store data
@@ -40,32 +47,49 @@ def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
 
-def retrieval_chain_without_lcel(query: str):
-    docs = retriever.invoke(query)
-    plain_text = format_docs(docs)  # Plain text
-    messages = prompt_template.format_messages(context=plain_text, question=query)
-    response = llm.invoke(messages)
-    return response.content
+def create_retrieval_chain_with_lcel():
+    # This takes the user question, and execute the retriever with the question, and then format_docs is executed.
+    # This means: make context from question.
+    context = itemgetter("question") | retriever | format_docs
+
+    # This is the key
+    # console.print(context.invoke({"question": "what is pinecone"}))
+
+    runnable_passthrough_assign = RunnablePassthrough.assign(context=context)
+    
+    retrieval_chain = (
+        {"question": itemgetter("question"), "context": context}
+        | prompt_template
+        | llm
+        | StrOutputParser()
+    )
+    return retrieval_chain
 
 
 if __name__ == "__main__":
     print("[*] Retrieving...")
 
-    query = "hi"
+    query = "What is PineCone in Machine Learning?"
 
     # =============================================
     # Option 0: raw invocation without RAG
     # =============================================
     print("\n" + "=" * 70)
     print("IMPLEMENTATION 0: Raw LLM invocation (No RAG)")
-    response = llm.invoke([HumanMessage(content=query)])
-    print(response.content)
+    parser = StrOutputParser()
+    response = llm.stream([HumanMessage(content=query)])
+    for chunk in parser.transform(response):
+        print(chunk, flush=True, end="")
     print("\n" + "=" * 70)
 
     # =============================================
-    # Option 1: Using RAG without LangChain Expression Language (Sea lo que sea Expression Language)
+    # Option 1: Using RAG with LangChain Expression Language (Sea lo que sea Expression Language)
     # =============================================
     print("\n" + "=" * 70)
-    print("IMPLEMENTATION 1: Using RAG without LangChain Expression Language")
-    print(retrieval_chain_without_lcel(query=query))
+    print("IMPLEMENTATION 1: Using LangChain Expression Language")
+    chain_with_lcel = create_retrieval_chain_with_lcel()
+    result_with_lcel = chain_with_lcel.stream({"question": query})
+    print("\nAnswer:")
+    for chunk in result_with_lcel:
+        print(chunk, flush=True, end="")
     print("\n" + "=" * 70)
